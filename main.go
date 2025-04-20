@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
-	"github.com/joho/godotenv"
 )
 
 type Game struct {
@@ -20,11 +19,6 @@ type Game struct {
 var games = make(map[int64]*Game) 
 
 func main() {
-	err := godotenv.Load("./app")
-	if err != nil {
-		panic(err)
-	}
-
     bot, err := tgbotapi.NewBotAPI(os.Getenv("TOKEN")) 
     if err != nil {
         log.Panic(err)
