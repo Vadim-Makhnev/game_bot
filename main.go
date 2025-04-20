@@ -13,17 +13,28 @@ import (
 
 type Game struct {
     OrganizerID int
-    Players     map[int]string 
+    Players     map[int]string
     mu          sync.Mutex
 }
 
-var games = make(map[int64]*Game) 
+var games = make(map[int64]*Game)
 
 func main() {
-	
-	go http.ListenAndServe(":8080", nil)
+    // Запускаем фиктивный HTTP-сервер в отдельной горутине
+    go func() {
+        port := os.Getenv("PORT")
+        if port == "" {
+            port = "8080" // Порт по умолчанию
+        }
+        log.Printf("Starting dummy HTTP server on port %s", port)
+        http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+            w.Write([]byte("OK"))
+        })
+        log.Fatal(http.ListenAndServe(":"+port, nil))
+    }()
 
-    bot, err := tgbotapi.NewBotAPI(os.Getenv("TOKEN")) 
+    // Инициализация Telegram-бота
+    bot, err := tgbotapi.NewBotAPI(os.Getenv("TOKEN"))
     if err != nil {
         log.Panic(err)
     }
@@ -36,17 +47,17 @@ func main() {
 
     updates := bot.GetUpdatesChan(u)
 
-	keyboard := tgbotapi.NewReplyKeyboard(
+    keyboard := tgbotapi.NewReplyKeyboard(
         tgbotapi.NewKeyboardButtonRow(
             tgbotapi.NewKeyboardButton("Кто играть в радугу?"),
-			tgbotapi.NewKeyboardButton("Не в радугу"),
+            tgbotapi.NewKeyboardButton("Не в радугу"),
         ),
-			tgbotapi.NewKeyboardButtonRow(
+        tgbotapi.NewKeyboardButtonRow(
             tgbotapi.NewKeyboardButton("Да"),
             tgbotapi.NewKeyboardButton("Нет"),
-			tgbotapi.NewKeyboardButton("Позже"),
-		),
-	)
+            tgbotapi.NewKeyboardButton("Позже"),
+        ),
+    )
 
     for update := range updates {
         if update.Message == nil {
@@ -57,28 +68,34 @@ func main() {
         chatID := msg.Chat.ID
         userID := msg.From.ID
         text := strings.ToLower(msg.Text)
-		log.Println(chatID)
 
-        switch strings.ToLower(text) {
+        switch text {
         case "кто играть в радугу?":
             startGame(bot, chatID, int(userID))
         case "да":
             respondToGame(bot, chatID, int(userID), "буду")
         case "нет":
             respondToGame(bot, chatID, int(userID), "не буду")
-		case "позже":
-			respondToGame(bot, chatID, int(userID), "позже")
-		case "не в радугу":
-			respNoRainbow(bot, chatID, int(userID))
+        case "позже":
+            respondToGame(bot, chatID, int(userID), "позже")
+        case "не в радугу":
+            respNoRainbow(bot, chatID, int(userID))
         default:
             sendMessageWithKeyboard(bot, chatID, "Выбери команду из меню.", keyboard)
         }
     }
 }
 
-func startGame(bot *tgbotapi.BotAPI, chatID int64, organizerID int) {
+func startGame(bot *tgbotapi.BotAPI, chatID int64, userID int) {
+    // Проверяем, не запущена ли уже игра
+    if _, exists := games[chatID]; exists {
+        sendMessage(bot, chatID, "Игра уже запущена. Завершите текущую игру, чтобы начать новую.")
+        return
+    }
+
+    // Запускаем новую игру
     games[chatID] = &Game{
-        OrganizerID: organizerID,
+        OrganizerID: userID,
         Players:     make(map[int]string),
     }
 
@@ -96,31 +113,42 @@ func respondToGame(bot *tgbotapi.BotAPI, chatID int64, userID int, response stri
     game.mu.Lock()
     defer game.mu.Unlock()
 
+    // Проверяем, голосовал ли пользователь ранее
+    if _, alreadyVoted := game.Players[userID]; alreadyVoted {
+        sendMessage(bot, chatID, "Вы уже проголосовали!")
+        return
+    }
+
+    // Сохраняем ответ пользователя
     game.Players[userID] = response
     sendMessage(bot, chatID, fmt.Sprintf("%s ответил '%s'.", botUserName(bot, userID), response))
 
-    if len(game.Players) >= 3 { 
+    // Проверяем, достаточно ли проголосовало пользователей
+    if len(game.Players) >= 3 {
         reportResults(bot, chatID, game)
-        delete(games, chatID) 
+        delete(games, chatID) // Очищаем данные игры
     }
 }
 
 func reportResults(bot *tgbotapi.BotAPI, chatID int64, game *Game) {
     var yesPlayers []string
     var noPlayers []string
-	var laterPlayers[]string
+    var laterPlayers []string
 
     for userID, response := range game.Players {
         if response == "буду" {
             yesPlayers = append(yesPlayers, botUserName(bot, userID))
-        } else if response == "позже"{
-			laterPlayers = append(laterPlayers, botUserName(bot, userID))
-		}else {
+        } else if response == "позже" {
+            laterPlayers = append(laterPlayers, botUserName(bot, userID))
+        } else {
             noPlayers = append(noPlayers, botUserName(bot, userID))
         }
     }
 
-    result := fmt.Sprintf("Результаты:\nДа: %s\nНет: %s \nПозже: %s", strings.Join(yesPlayers, ", "), strings.Join(noPlayers, ", "), strings.Join(laterPlayers, ", "))
+    result := fmt.Sprintf("Результаты:\nДа: %s\nНет: %s\nПозже: %s",
+        strings.Join(yesPlayers, ", "),
+        strings.Join(noPlayers, ", "),
+        strings.Join(laterPlayers, ", "))
     sendMessage(bot, chatID, result)
 }
 
@@ -132,6 +160,7 @@ func sendMessage(bot *tgbotapi.BotAPI, chatID int64, text string) {
 func botUserName(bot *tgbotapi.BotAPI, userID int) string {
     user, err := bot.GetChat(tgbotapi.ChatInfoConfig{ChatConfig: tgbotapi.ChatConfig{ChatID: int64(userID)}})
     if err != nil {
+        log.Printf("Error fetching username for user %d: %v", userID, err)
         return fmt.Sprintf("Player %d", userID)
     }
     return user.UserName
@@ -143,12 +172,12 @@ func sendMessageWithKeyboard(bot *tgbotapi.BotAPI, chatID int64, text string, ke
     bot.Send(msg)
 }
 
-func respNoRainbow(bot *tgbotapi.BotAPI, chatID int64, userID int ) {
-	var msg string
-	user, err := bot.GetChat(tgbotapi.ChatInfoConfig{ChatConfig: tgbotapi.ChatConfig{ChatID: int64(userID)}})
-	if err != nil {
-        msg = "error"
+func respNoRainbow(bot *tgbotapi.BotAPI, chatID int64, userID int) {
+    user, err := bot.GetChat(tgbotapi.ChatInfoConfig{ChatConfig: tgbotapi.ChatConfig{ChatID: int64(userID)}})
+    if err != nil {
+        sendMessage(bot, chatID, "Произошла ошибка при получении имени пользователя.")
+        return
     }
-	msg = fmt.Sprintf("Ну а нафиг ты тогда зашел сюда? %s", "@" + user.UserName)
-	sendMessage(bot, chatID, msg)
+    msg := fmt.Sprintf("Ну ладно, %s, заходи в другой раз!", "@"+user.UserName)
+    sendMessage(bot, chatID, msg)
 }
