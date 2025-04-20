@@ -20,11 +20,11 @@ type Game struct {
 var games = make(map[int64]*Game) 
 
 func main() {
-	err := godotenv.Load()
+	err := godotenv.Load("./app")
 	if err != nil {
 		panic(err)
 	}
-	
+
     bot, err := tgbotapi.NewBotAPI(os.Getenv("TOKEN")) 
     if err != nil {
         log.Panic(err)
