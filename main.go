@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -19,6 +20,10 @@ type Game struct {
 var games = make(map[int64]*Game) 
 
 func main() {
+	err := http.ListenAndServe(":8080", nil)
+	if err != nil {
+		panic(err)
+	}
     bot, err := tgbotapi.NewBotAPI(os.Getenv("TOKEN")) 
     if err != nil {
         log.Panic(err)
