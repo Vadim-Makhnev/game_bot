@@ -20,10 +20,9 @@ type Game struct {
 var games = make(map[int64]*Game) 
 
 func main() {
-	err := http.ListenAndServe(":8080", nil)
-	if err != nil {
-		panic(err)
-	}
+	
+	go http.ListenAndServe(":8080", nil)
+
     bot, err := tgbotapi.NewBotAPI(os.Getenv("TOKEN")) 
     if err != nil {
         log.Panic(err)
